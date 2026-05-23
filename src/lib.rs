@@ -634,7 +634,7 @@ impl<C: Instantiable> Pass for Folder<C> {
     fn run(&self, netlist: &Rc<Netlist<Self::I>>) -> Result<String, Error> {
         let iters = self.fold(netlist)?;
         Ok(format!(
-            "Folded {} pattterns over {} iterations",
+            "Folded {} patterns over {} iterations",
             self.patterns.len(),
             iters
         ))
