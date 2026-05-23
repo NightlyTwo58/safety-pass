@@ -45,3 +45,28 @@ fn test_ld_pattern() {
 
     assert_eq!(res.unwrap(), "Folded 1 patterns over 1 iterations");
 }
+
+#[test]
+fn test_run_twice_pattern() {
+    let nl = ex_netlist();
+
+    let mut folder = Folder::<Cell>::new(101);
+    folder.insert(Idempotent);
+
+    let before = nl.len();
+
+    let res = folder.run(&nl);
+    assert!(res.is_ok());
+
+    let after = nl.len();
+    assert_eq!(after + 1, before);
+
+    let res = folder.run(&nl);
+    assert!(res.is_ok());
+
+    let fin = nl.len();
+
+    assert_eq!(fin, after);
+
+    assert_eq!(res.unwrap(), "Folded 1 patterns over 0 iterations");
+}
