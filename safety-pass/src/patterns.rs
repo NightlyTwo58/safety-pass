@@ -6,7 +6,7 @@
 
 use crate::{Cell, CellType, Create, Pattern, Replace};
 use log::debug;
-use safety_net::{Error, NetRef, DrivenNet, FanOutTable};
+use safety_net::{Error, NetRef, DrivenNet};
 use std::fmt;
 
 /// A * A = A
@@ -28,7 +28,6 @@ impl Pattern for Idempotent {
         cell_type: &Self::I,
         _create: &Create<Self::I>,
         replace: &mut Replace<Self::I>,
-        _fan_out: &FanOutTable<Self::I>,
     ) -> Result<bool, Error> {
         if !matches!(
             cell_type.get_type(),
@@ -73,17 +72,15 @@ fn is_or(ct: CellType) -> bool {
     matches!(ct, CellType::OR | CellType::OR2 | CellType::OR3 | CellType::OR4)
 }
 
-/// Returns None if the cells if
-/// (1) A gate is not monotone (AND or OR)
-/// -or- (2) A gate is mismatched (need to be all AND or all OR)
-/// -or- (3) The fan-in of all the children gates is too large
-/// -or- (4) A gate feeds itself
-fn can_combine(ctype: CellType, children: &[CellType]) -> Option<CellType> {
+/**
+ * Checks if monotone pattern can combine
+ */
+fn can_combine(ctype: CellType, children: &[CellType], extra: usize) -> Option<CellType> {
     if !is_and(ctype) && !is_or(ctype) {
         return None;
     }
     let andg = is_and(ctype);
-    let mut fanin = 0;
+    let mut fanin = extra;
     for child in children {
         if andg != is_and(*child) {
             return None;
@@ -120,7 +117,6 @@ impl Pattern for MonotoneFold {
         cell_type: &Self::I,
         create: &Create<Self::I>,
         replace: &mut Replace<Self::I>,
-        fan_out: &FanOutTable<Self::I>,
     ) -> Result<bool, Error> {
         let root_type = cell_type.get_type();
         if !is_and(root_type) && !is_or(root_type) {
@@ -141,18 +137,12 @@ impl Pattern for MonotoneFold {
             let driver = driver.unwrap();
             let driver_ref = driver.clone().unwrap();
 
-            // Only fold if this child has fan-out of 1 (nothing else uses it)
             let child_ctype = driver_ref.get_instance_type().map(|t| t.get_type());
             match child_ctype {
                 Some(ct) if (is_and(ct) && is_and(root_type))
                          || (is_or(ct) && is_or(root_type)) =>
                 {
-                    let users = fan_out.get_node_users(&driver_ref).count();
-                    if users == 1 {
-                        child_drivers.push((i, driver_ref, ct));
-                    } else {
-                        non_child_drivers.push(driver);
-                    }
+                    child_drivers.push((i, driver_ref, ct));
                 }
                 _ => {
                     non_child_drivers.push(driver);
@@ -167,18 +157,11 @@ impl Pattern for MonotoneFold {
 
         // Collect all grandchild inputs
         let child_types: Vec<CellType> = child_drivers.iter().map(|(_, _, ct)| *ct).collect();
-        let total_fanin: usize = child_types.iter().map(|ct| ct.get_num_inputs()).sum::<usize>()
-            + non_child_drivers.len();
 
-        // Check the combined fanin fits a supported gate size
-        let new_type = match (is_and(root_type), total_fanin) {
-            (true, 2) => CellType::AND2,
-            (true, 3) => CellType::AND3,
-            (true, 4) => CellType::AND4,
-            (false, 2) => CellType::OR2,
-            (false, 3) => CellType::OR3,
-            (false, 4) => CellType::OR4,
-            _ => return Ok(false),
+        // Check the combined fanin
+        let new_type = match can_combine(root_type, &child_types, non_child_drivers.len()) {
+            Some(t) => t,
+            None => return Ok(false),
         };
 
         let new_inst_name = cell.get_instance_name().unwrap() + "_folded".into();

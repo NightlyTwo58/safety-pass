@@ -9,7 +9,6 @@ Compiler pass infrastructure for safety-net
 use log::info;
 use safety_net::{DrivenNet, Identifier, Instantiable, NetRef, Netlist};
 use std::{collections::HashSet, fmt, rc::Rc};
-use safety_net::graph::FanOutTable;
 use thiserror::Error;
 
 mod cells;
@@ -123,7 +122,6 @@ pub trait Pattern: fmt::Debug + fmt::Display {
         cell_type: &Self::I,
         create: &Create<Self::I>,
         replace: &mut Replace<Self::I>,
-        fan_out: &FanOutTable<Self::I>,
     ) -> Result<bool, safety_net::Error>;
 }
 
@@ -166,8 +164,6 @@ impl<I: Instantiable> Folder<I> {
                 Ok(())
             };
 
-            let fan_out = netlist.get_analysis::<FanOutTable<I>>().map_err(|e| Error::Other(e))?;
-
             let mut change = false;
             'iter: for cell in netlist.objects() {
                 if cleaned.contains(&cell) {
@@ -177,7 +173,7 @@ impl<I: Instantiable> Folder<I> {
                 if let Some(cell_type) = ctype {
                     for pattern in &self.patterns {
                         last_pat = Some(pattern.as_ref());
-                        match pattern.apply(&cell, &cell_type, &create, &mut replace, &fan_out) {
+                        match pattern.apply(&cell, &cell_type, &create, &mut replace) {
                             Ok(true) => {
                                 change = true;
                                 break 'iter;
