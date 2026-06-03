@@ -6,7 +6,7 @@
 
 use crate::{Cell, CellType, Create, Pattern, Replace};
 use log::debug;
-use safety_net::{DrivenNet, Error, Instantiable, NetRef};
+use safety_net::{DrivenNet, Error, InputPort, Instantiable, NetRef};
 use std::fmt;
 
 /// A * A = A
@@ -73,7 +73,7 @@ impl fmt::Display for MonotoneFold {
 impl MonotoneFold {
     /// Helper to [apply] that checks homogeneity of fanin gates
     fn can_combine(ct: CellType, children: &[CellType], extra: usize) -> Option<CellType> {
-        if ct.is_and() && ct.is_or() {
+        if !ct.is_and() && !ct.is_or() {
             return None;
         }
         let andg = ct.is_and();
@@ -188,40 +188,6 @@ impl Pattern for MonotoneFold {
     }
 }
 
-type ConstInputs = Option<(Option<usize>, Option<usize>, Option<DrivenNet<Cell>>)>;
-
-/// Scans the inputs of a 2-input gate and returns which slots hold a
-/// constant-false driver, a constant-true driver, and the non-constant driver.
-/// Returns `None` if any input is undriven (pattern cannot fire).
-/// Helper to [AndAbsorb], [OrAbsorb], [AndIdentity], and [OrIdentity]
-fn search_constant_inputs(cell: &NetRef<Cell>, ct: &CellType) -> ConstInputs {
-    let num_inputs = ct.get_num_inputs();
-    let mut const_false: Option<usize> = None;
-    let mut const_true: Option<usize> = None;
-    let mut other: Option<DrivenNet<Cell>> = None;
-
-    for i in 0..num_inputs {
-        let driver = cell.get_input(i).get_driver()?;
-        let driver_ref = driver.clone().unwrap();
-        match driver_ref
-            .get_instance_type()
-            .and_then(|t| t.get_constant())
-        {
-            Some(safety_net::Logic::False) => {
-                const_false = Some(i);
-            }
-            Some(safety_net::Logic::True) => {
-                const_true = Some(i);
-            }
-            _ => {
-                other = Some(driver);
-            }
-        }
-    }
-
-    Some((const_false, const_true, other))
-}
-
 /// A AND 0 = 0 (absorbing element)
 #[derive(Debug)]
 pub struct AndAbsorb;
@@ -243,13 +209,10 @@ impl Pattern for AndAbsorb {
         if !matches!(ct, CellType::AND | CellType::AND2) {
             return Ok(false);
         }
-        let Some((const_false, _, _)) = search_constant_inputs(cell, &ct) else {
+        let Some((Some(gnd_port), _, _)) = search_inputs(cell) else {
             return Ok(false);
         };
-        let Some(idx) = const_false else {
-            return Ok(false);
-        };
-        let gnd_driver = cell.get_input(idx).get_driver().unwrap();
+        let gnd_driver = gnd_port.get_driver().unwrap();
         let output = cell.get_output(0);
         debug!("AndAbsorb: AND absorb 0 on cell {}!", output.as_net());
         replace(output, gnd_driver)?;
@@ -278,13 +241,7 @@ impl Pattern for AndIdentity {
         if !matches!(ct, CellType::AND | CellType::AND2) {
             return Ok(false);
         }
-        let Some((_, const_true, other)) = search_constant_inputs(cell, &ct) else {
-            return Ok(false);
-        };
-        if const_true.is_none() {
-            return Ok(false);
-        }
-        let Some(other_driver) = other else {
+        let Some((_, Some(_), Some(other_driver))) = search_inputs(cell) else {
             return Ok(false);
         };
         let output = cell.get_output(0);
@@ -315,13 +272,10 @@ impl Pattern for OrAbsorb {
         if !matches!(ct, CellType::OR | CellType::OR2) {
             return Ok(false);
         }
-        let Some((_, const_true, _)) = search_constant_inputs(cell, &ct) else {
+        let Some((_, Some(vcc_port), _)) = search_inputs(cell) else {
             return Ok(false);
         };
-        let Some(idx) = const_true else {
-            return Ok(false);
-        };
-        let vcc_driver = cell.get_input(idx).get_driver().unwrap();
+        let vcc_driver = vcc_port.get_driver().unwrap();
         let output = cell.get_output(0);
         debug!("OrAbsorb: OR absorb 1 on cell {}!", output.as_net());
         replace(output, vcc_driver)?;
@@ -350,13 +304,7 @@ impl Pattern for OrIdentity {
         if !matches!(ct, CellType::OR | CellType::OR2) {
             return Ok(false);
         }
-        let Some((const_false, _, other)) = search_constant_inputs(cell, &ct) else {
-            return Ok(false);
-        };
-        if const_false.is_none() {
-            return Ok(false);
-        }
-        let Some(other_driver) = other else {
+        let Some((Some(_), _, Some(other_driver))) = search_inputs(cell) else {
             return Ok(false);
         };
         let output = cell.get_output(0);
@@ -418,40 +366,41 @@ impl Pattern for DoubleNegation {
     }
 }
 
-type DrivenConstInputs = Option<(
-    Option<DrivenNet<Cell>>,
-    Option<DrivenNet<Cell>>,
+/// Return type for [`search_inputs`]: `(const_false_port, const_true_port, other_driver)`.
+/// `None` at the outer level means an input was undriven; inner `None` means no constant of
+/// that polarity was found.
+type ConstInputs = Option<(
+    Option<InputPort<Cell>>,
+    Option<InputPort<Cell>>,
     Option<DrivenNet<Cell>>,
 )>;
 
-/// Scans the inputs of a 2-input gate. Returns `None` if any input is undriven.
-/// Slots hold the full driver so absorb patterns can forward the constant cell's
-/// output directly; the non-constant input is stored in `other`.
-fn search_driven_inputs(cell: &NetRef<Cell>, ct: &CellType) -> DrivenConstInputs {
-    let num_inputs = ct.get_num_inputs();
-    let mut const_false: Option<DrivenNet<Cell>> = None;
-    let mut const_true: Option<DrivenNet<Cell>> = None;
+/// Scans the inputs of a gate and classifies each as a constant-false port, constant-true port,
+/// or non-constant driver. Returns `None` if any input is undriven.
+/// Helper to [`AndAbsorb`], [`AndIdentity`], [`OrAbsorb`], [`OrIdentity`],
+/// [`NandAbsorb`], [`NandIdentity`], [`NorAbsorb`], and [`NorIdentity`].
+fn search_inputs(cell: &NetRef<Cell>) -> ConstInputs {
+    let mut const_false: Option<InputPort<Cell>> = None;
+    let mut const_true: Option<InputPort<Cell>> = None;
     let mut other: Option<DrivenNet<Cell>> = None;
-
-    for i in 0..num_inputs {
-        let driver = cell.get_input(i).get_driver()?;
+    for port in cell.inputs() {
+        let driver = port.get_driver()?;
         let driver_ref = driver.clone().unwrap();
         match driver_ref
             .get_instance_type()
             .and_then(|t| t.get_constant())
         {
             Some(safety_net::Logic::False) => {
-                const_false = Some(driver);
+                const_false = Some(port);
             }
             Some(safety_net::Logic::True) => {
-                const_true = Some(driver);
+                const_true = Some(port);
             }
             _ => {
                 other = Some(driver);
             }
         }
     }
-
     Some((const_false, const_true, other))
 }
 
@@ -476,7 +425,7 @@ impl Pattern for NandAbsorb {
         if !matches!(ct, CellType::NAND | CellType::NAND2) {
             return Ok(false);
         }
-        let Some((const_false, _, _)) = search_driven_inputs(cell, &ct) else {
+        let Some((const_false, _, _)) = search_inputs(cell) else {
             return Ok(false);
         };
         if const_false.is_none() {
@@ -512,7 +461,7 @@ impl Pattern for NandIdentity {
         if !matches!(ct, CellType::NAND | CellType::NAND2) {
             return Ok(false);
         }
-        let Some((_, const_true, other)) = search_driven_inputs(cell, &ct) else {
+        let Some((_, const_true, other)) = search_inputs(cell) else {
             return Ok(false);
         };
         if const_true.is_none() {
@@ -552,7 +501,7 @@ impl Pattern for NorAbsorb {
         if !matches!(ct, CellType::NOR | CellType::NOR2) {
             return Ok(false);
         }
-        let Some((_, const_true, _)) = search_driven_inputs(cell, &ct) else {
+        let Some((_, const_true, _)) = search_inputs(cell) else {
             return Ok(false);
         };
         if const_true.is_none() {
@@ -588,7 +537,7 @@ impl Pattern for NorIdentity {
         if !matches!(ct, CellType::NOR | CellType::NOR2) {
             return Ok(false);
         }
-        let Some((const_false, _, other)) = search_driven_inputs(cell, &ct) else {
+        let Some((const_false, _, other)) = search_inputs(cell) else {
             return Ok(false);
         };
         if const_false.is_none() {
