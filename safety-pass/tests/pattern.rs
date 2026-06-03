@@ -1,6 +1,6 @@
 use safety_net::{Instantiable, Net, Netlist};
 use safety_pass::{Cell, CellType, Folder, Pass};
-use safety_pass::patterns::{ConstantFold, ConstantNandNor, DoubleNegation, Idempotent, MonotoneFold};
+use safety_pass::patterns::{AndIdentity, OrIdentity, AndAbsorb, OrAbsorb, NandIdentity, NorIdentity, NandAbsorb, NorAbsorb, DoubleNegation, Idempotent, MonotoneFold};
 use std::rc::Rc;
 
 fn and_gate() -> Cell {
@@ -333,14 +333,10 @@ fn test_monotone_fold_and3() {
     let after = nl.len();
     assert_eq!(after + 1, before);
     // Verify the remaining gate is AND3
-    let gates: Vec<_> = nl
-        .objects()
-        .filter(|n| n.get_instance_type().is_some())
-        .filter(|n| !n.is_an_input())
-        .collect();
-    assert_eq!(gates.len(), 1);
+    let gates: Vec<_> = nl.objects().collect();
+    assert_eq!(gates.len(), 4);
     assert_eq!(
-        gates[0].get_instance_type().unwrap().get_type(),
+        gates[3].get_instance_type().unwrap().get_type(),
         CellType::AND3
     );
 }
@@ -428,7 +424,7 @@ fn test_constant_fold_and0() {
     // after:  2 objects (a, gnd) — inst_0 cleaned, output rewired to gnd
     let nl = and_const0_netlist();
     let mut folder = Folder::<Cell>::new(101);
-    folder.insert(ConstantFold);
+    folder.insert(AndAbsorb);
     let before = nl.len();
     assert_eq!(before, 3);
     let res = folder.run(&nl);
@@ -451,7 +447,7 @@ fn test_constant_fold_and1() {
     // after:  2 objects (a, vcc) — inst_0 cleaned, output rewired to a
     let nl = and_const1_netlist();
     let mut folder = Folder::<Cell>::new(101);
-    folder.insert(ConstantFold);
+    folder.insert(AndIdentity);
     let before = nl.len();
     assert_eq!(before, 3);
     let res = folder.run(&nl);
@@ -468,7 +464,7 @@ fn test_constant_fold_or1() {
     // OR(a, 1) = 1
     let nl = or_const1_netlist();
     let mut folder = Folder::<Cell>::new(101);
-    folder.insert(ConstantFold);
+    folder.insert(OrAbsorb);
     let before = nl.len();
     assert_eq!(before, 3);
     let res = folder.run(&nl);
@@ -488,7 +484,7 @@ fn test_constant_fold_or0() {
     // OR(a, 0) = a
     let nl = or_const0_netlist();
     let mut folder = Folder::<Cell>::new(101);
-    folder.insert(ConstantFold);
+    folder.insert(OrIdentity);
     let before = nl.len();
     assert_eq!(before, 3);
     let res = folder.run(&nl);
@@ -552,7 +548,7 @@ fn test_nand_const0() {
     // NAND(a, 0) = 1 — output rewired to new VCC
     let nl = nand_const0_netlist();
     let mut folder = Folder::<Cell>::new(101);
-    folder.insert(ConstantNandNor);
+    folder.insert(NandAbsorb);
     let res = folder.run(&nl);
     assert!(res.is_ok());
     let outputs = nl.outputs();
@@ -569,7 +565,7 @@ fn test_nand_const1() {
     // NAND(a, 1) = NOT(a) — output rewired to new INV
     let nl = nand_const1_netlist();
     let mut folder = Folder::<Cell>::new(101);
-    folder.insert(ConstantNandNor);
+    folder.insert(NandIdentity);
     let res = folder.run(&nl);
     assert!(res.is_ok());
     let outputs = nl.outputs();
@@ -586,7 +582,7 @@ fn test_nor_const1() {
     // NOR(a, 1) = 0 — output rewired to new GND
     let nl = nor_const1_netlist();
     let mut folder = Folder::<Cell>::new(101);
-    folder.insert(ConstantNandNor);
+    folder.insert(NorAbsorb);
     let res = folder.run(&nl);
     assert!(res.is_ok());
     let outputs = nl.outputs();
@@ -603,7 +599,7 @@ fn test_nor_const0() {
     // NOR(a, 0) = NOT(a) — output rewired to new INV
     let nl = nor_const0_netlist();
     let mut folder = Folder::<Cell>::new(101);
-    folder.insert(ConstantNandNor);
+    folder.insert(NorIdentity);
     let res = folder.run(&nl);
     assert!(res.is_ok());
     let outputs = nl.outputs();

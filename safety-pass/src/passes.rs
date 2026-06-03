@@ -159,34 +159,41 @@ impl<I: Instantiable> Pass for RenameNets<I> {
     }
 }
 
-/// A pass that runs all built-in patterns to a fixed point.
-/// Applies patterns in order:
-/// ConstantFold, ConstantNandNor, DoubleNegation, Idempotent, MonotoneFold
-pub struct FoldPass;
+/// A pass that runs all patterns to a covergence.
+/// Checks patterns in insertion order
+/// AndIdentity, OrIdentity, AndAbsorb, OrAbsorb, NandIdentity, NorIdentity, NandAbsorb, NorAbsorb,
+/// DoubleNegation, Idempotent, MonotoneFold
+pub struct FoldAllPatternsPass;
 
-impl fmt::Display for FoldPass {
+impl fmt::Display for FoldAllPatternsPass {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "FoldPass")
+        write!(f, "FoldAllPatternsPass")
     }
 }
 
-impl fmt::Debug for FoldPass {
+impl fmt::Debug for FoldAllPatternsPass {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "FoldPass")
+        write!(f, "FoldAllPatternsPass")
     }
 }
 
-impl Pass for FoldPass {
+impl Pass for FoldAllPatternsPass {
     type I = Cell;
 
     fn run(&self, netlist: &Rc<Netlist<Self::I>>) -> Result<String, Error> {
         use crate::patterns::{
-            ConstantFold, ConstantNandNor, DoubleNegation, Idempotent, MonotoneFold,
+            AndIdentity, OrIdentity, AndAbsorb, OrAbsorb, NandIdentity, NorIdentity, NandAbsorb, NorAbsorb, 
+            DoubleNegation, Idempotent, MonotoneFold,
         };
         let mut folder = crate::Folder::new(1000);
-        // Order matters — see lib.rs pattern ordering comment
-        folder.insert(ConstantFold);
-        folder.insert(ConstantNandNor);
+        folder.insert(AndIdentity);
+        folder.insert(OrIdentity);
+        folder.insert(NandIdentity);
+        folder.insert(NorIdentity);
+        folder.insert(AndAbsorb);
+        folder.insert(OrAbsorb);        
+        folder.insert(NandAbsorb);
+        folder.insert(NorAbsorb);
         folder.insert(DoubleNegation);
         folder.insert(Idempotent);
         folder.insert(MonotoneFold);
@@ -201,7 +208,7 @@ register_passes!(BasicPasses<Cell>;
     #[cfg(feature = "graph")]
     DotGraph<Cell>,
     /// A pass that runs all built-in patterns to a fixed point.
-    FoldPass,
+    FoldAllPatternsPass,
     /// A dummy pass that emits the Verilog of the netlist.
     PrintVerilog<Cell>,
     /// A pass that renames wires and instances sequentially __0__, __1__, ...

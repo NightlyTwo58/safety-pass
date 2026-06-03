@@ -220,6 +220,16 @@ impl CellType {
         matches!(self, Self::FDRE | Self::FDSE | Self::FDPE | Self::FDCE)
     }
 
+    /// Returns true if cell is an AND gate
+    pub fn is_and(&self) -> bool {
+        matches!(self, Self::AND | Self::AND2 | Self::AND3 | Self::AND4)
+    }
+
+    /// Returns true if cell is an OR gate
+    pub fn is_or(&self) -> bool {
+        matches!(self, Self::OR | Self::OR2 | Self::OR3 | Self::OR4)
+    }
+
     /// Get the area of a minimum sized instance of the cell type
     pub fn get_min_area(&self) -> Option<f32> {
         match self {
