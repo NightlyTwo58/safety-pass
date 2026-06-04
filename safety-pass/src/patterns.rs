@@ -96,6 +96,44 @@ impl MonotoneFold {
     }
 }
 
+/// Return type for [`search_inputs`]: `(const_false_port, const_true_port, other_driver)`.
+/// `None` at the outer level means an input was undriven; inner `None` means no constant of
+/// that polarity was found.
+type ConstInputs = Option<(
+    Option<InputPort<Cell>>,
+    Option<InputPort<Cell>>,
+    Option<DrivenNet<Cell>>,
+)>;
+
+/// Scans the inputs of a gate and classifies each as a constant-false port, constant-true port,
+/// or non-constant driver. Returns `None` if any input is undriven.
+/// Helper to [`AndAbsorb`], [`AndIdentity`], [`OrAbsorb`], [`OrIdentity`],
+/// [`NandAbsorb`], [`NandIdentity`], [`NorAbsorb`], and [`NorIdentity`].
+fn search_inputs(cell: &NetRef<Cell>) -> ConstInputs {
+    let mut const_false: Option<InputPort<Cell>> = None;
+    let mut const_true: Option<InputPort<Cell>> = None;
+    let mut other: Option<DrivenNet<Cell>> = None;
+    for port in cell.inputs() {
+        let driver = port.get_driver()?;
+        let driver_ref = driver.clone().unwrap();
+        match driver_ref
+            .get_instance_type()
+            .and_then(|t| t.get_constant())
+        {
+            Some(safety_net::Logic::False) => {
+                const_false = Some(port);
+            }
+            Some(safety_net::Logic::True) => {
+                const_true = Some(port);
+            }
+            _ => {
+                other = Some(driver);
+            }
+        }
+    }
+    Some((const_false, const_true, other))
+}
+
 impl Pattern for MonotoneFold {
     type I = Cell;
 
@@ -112,27 +150,25 @@ impl Pattern for MonotoneFold {
             return Ok(false);
         }
 
-        let num_inputs = root_type.get_num_inputs();
-
-        let mut child_drivers: Vec<(usize, NetRef<Self::I>, CellType)> = Vec::new();
+        let mut child_drivers: Vec<NetRef<Self::I>> = Vec::new();
+        let mut child_types: Vec<CellType> = Vec::new();
         let mut non_child_drivers: Vec<DrivenNet<Self::I>> = Vec::new();
 
-        for i in 0..num_inputs {
-            let driver = cell.get_input(i).get_driver();
-            if driver.is_none() {
+        for input in cell.inputs() {
+            let Some(driver) = input.get_driver() else {
                 return Ok(false);
-            }
-
-            let driver = driver.unwrap();
-            let driver_ref = driver.clone().unwrap();
-
-            let child_ctype = driver_ref.get_instance_type().map(|t| t.get_type());
-
-            match child_ctype {
+            };
+            match driver
+                .clone()
+                .unwrap()
+                .get_instance_type()
+                .map(|ct| ct.get_type())
+            {
                 Some(ct)
                     if (ct.is_and() && root_type.is_and()) || (ct.is_or() && root_type.is_or()) =>
                 {
-                    child_drivers.push((i, driver_ref, ct));
+                    child_drivers.push(driver.clone().unwrap());
+                    child_types.push(ct);
                 }
                 _ => {
                     non_child_drivers.push(driver);
@@ -144,8 +180,6 @@ impl Pattern for MonotoneFold {
             return Ok(false);
         }
 
-        let child_types: Vec<CellType> = child_drivers.iter().map(|(_, _, ct)| *ct).collect();
-
         let new_type = match Self::can_combine(root_type, &child_types, non_child_drivers.len()) {
             Some(t) => t,
             None => return Ok(false),
@@ -155,20 +189,11 @@ impl Pattern for MonotoneFold {
         let new_gate = create(Cell::new(new_type, None), new_inst_name);
 
         let mut port_idx = 0;
-        for (_, child_ref, _) in &child_drivers {
-            let child_num_inputs = child_ref
-                .get_instance_type()
-                .unwrap()
-                .get_type()
-                .get_num_inputs();
-            for j in 0..child_num_inputs {
-                let grandchild_driver = child_ref.get_input(j).get_driver();
-                if grandchild_driver.is_none() {
-                    return Ok(false);
+        for child_ref in &child_drivers {
+            for input in child_ref.inputs() {
+                if let Some(grandchild) = input.get_driver() {
+                    new_gate.get_input(port_idx).connect(grandchild);
                 }
-                new_gate
-                    .get_input(port_idx)
-                    .connect(grandchild_driver.unwrap());
                 port_idx += 1;
             }
         }
@@ -330,78 +355,28 @@ impl Pattern for DoubleNegation {
     fn apply(
         &self,
         cell: &NetRef<Self::I>,
-        cell_type: &Self::I,
+        _cell_type: &Self::I,
         _create: &Create<Self::I>,
         replace: &mut Replace<Self::I>,
     ) -> Result<bool, Error> {
-        // Outer gate must be an inverter
-        if !matches!(cell_type.get_type(), CellType::NOT | CellType::INV) {
+        let Some(driver) = cell.get_input(0).get_driver() else {
             return Ok(false);
-        }
-
-        let driver = cell.get_input(0).get_driver();
-        if driver.is_none() {
-            return Ok(false);
-        }
-        let driver = driver.unwrap();
+        };
         let driver_ref = driver.clone().unwrap();
-
-        // Inner gate must also be an inverter
-        let inner_type = driver_ref.get_instance_type().map(|t| t.get_type());
-        if !matches!(inner_type, Some(CellType::NOT) | Some(CellType::INV)) {
+        let Some(inner_input) = driver_ref
+            .get_instance_type()
+            .filter(|t| matches!(t.get_type(), CellType::NOT | CellType::INV))
+            .and_then(|_| driver_ref.get_input(0).get_driver())
+        else {
             return Ok(false);
-        }
-
-        // Get the input to the inner inverter
-        let inner_input = driver_ref.get_input(0).get_driver();
-        if inner_input.is_none() {
-            return Ok(false);
-        }
+        };
 
         let output = cell.get_output(0);
         debug!("DoubleNegation applied to cell {}!", output.as_net());
-        replace(output, inner_input.unwrap())?;
+        replace(output, inner_input)?;
 
         Ok(true)
     }
-}
-
-/// Return type for [`search_inputs`]: `(const_false_port, const_true_port, other_driver)`.
-/// `None` at the outer level means an input was undriven; inner `None` means no constant of
-/// that polarity was found.
-type ConstInputs = Option<(
-    Option<InputPort<Cell>>,
-    Option<InputPort<Cell>>,
-    Option<DrivenNet<Cell>>,
-)>;
-
-/// Scans the inputs of a gate and classifies each as a constant-false port, constant-true port,
-/// or non-constant driver. Returns `None` if any input is undriven.
-/// Helper to [`AndAbsorb`], [`AndIdentity`], [`OrAbsorb`], [`OrIdentity`],
-/// [`NandAbsorb`], [`NandIdentity`], [`NorAbsorb`], and [`NorIdentity`].
-fn search_inputs(cell: &NetRef<Cell>) -> ConstInputs {
-    let mut const_false: Option<InputPort<Cell>> = None;
-    let mut const_true: Option<InputPort<Cell>> = None;
-    let mut other: Option<DrivenNet<Cell>> = None;
-    for port in cell.inputs() {
-        let driver = port.get_driver()?;
-        let driver_ref = driver.clone().unwrap();
-        match driver_ref
-            .get_instance_type()
-            .and_then(|t| t.get_constant())
-        {
-            Some(safety_net::Logic::False) => {
-                const_false = Some(port);
-            }
-            Some(safety_net::Logic::True) => {
-                const_true = Some(port);
-            }
-            _ => {
-                other = Some(driver);
-            }
-        }
-    }
-    Some((const_false, const_true, other))
 }
 
 /// NAND(A, 0) = 1 (absorbing element)
@@ -425,12 +400,12 @@ impl Pattern for NandAbsorb {
         if !matches!(ct, CellType::NAND | CellType::NAND2) {
             return Ok(false);
         }
-        let Some((const_false, _, _)) = search_inputs(cell) else {
+        let Some((_const_false, _, _)) = search_inputs(cell) else {
             return Ok(false);
         };
-        if const_false.is_none() {
+        let Some((Some(_), _, _)) = search_inputs(cell) else {
             return Ok(false);
-        }
+        };
         let inst_name = cell.get_instance_name().unwrap();
         let vcc = create(Cell::new(CellType::VCC, None), inst_name + "_const1".into());
         let output = cell.get_output(0);
@@ -461,13 +436,13 @@ impl Pattern for NandIdentity {
         if !matches!(ct, CellType::NAND | CellType::NAND2) {
             return Ok(false);
         }
-        let Some((_, const_true, other)) = search_inputs(cell) else {
+        let Some((_, const_true, _other)) = search_inputs(cell) else {
             return Ok(false);
         };
         if const_true.is_none() {
             return Ok(false);
         }
-        let Some(other_driver) = other else {
+        let Some((_, Some(_), Some(other_driver))) = search_inputs(cell) else {
             return Ok(false);
         };
         let inst_name = cell.get_instance_name().unwrap();
@@ -501,12 +476,12 @@ impl Pattern for NorAbsorb {
         if !matches!(ct, CellType::NOR | CellType::NOR2) {
             return Ok(false);
         }
-        let Some((_, const_true, _)) = search_inputs(cell) else {
+        let Some((_, _const_true, _)) = search_inputs(cell) else {
             return Ok(false);
         };
-        if const_true.is_none() {
+        let Some((_, Some(_), _)) = search_inputs(cell) else {
             return Ok(false);
-        }
+        };
         let inst_name = cell.get_instance_name().unwrap();
         let gnd = create(Cell::new(CellType::GND, None), inst_name + "_const0".into());
         let output = cell.get_output(0);
@@ -537,13 +512,13 @@ impl Pattern for NorIdentity {
         if !matches!(ct, CellType::NOR | CellType::NOR2) {
             return Ok(false);
         }
-        let Some((const_false, _, other)) = search_inputs(cell) else {
+        let Some((const_false, _, _other)) = search_inputs(cell) else {
             return Ok(false);
         };
         if const_false.is_none() {
             return Ok(false);
         }
-        let Some(other_driver) = other else {
+        let Some((Some(_), _, Some(other_driver))) = search_inputs(cell) else {
             return Ok(false);
         };
         let inst_name = cell.get_instance_name().unwrap();
