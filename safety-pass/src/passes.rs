@@ -163,21 +163,16 @@ impl<I: Instantiable> Pass for RenameNets<I> {
 /// Checks patterns in insertion order
 /// AndIdentity, OrIdentity, AndAbsorb, OrAbsorb, NandIdentity, NorIdentity, NandAbsorb, NorAbsorb,
 /// DoubleNegation, Idempotent, MonotoneFold
-pub struct FoldAllPatternsPass;
+#[derive(Debug)]
+pub struct FoldAllPatterns;
 
-impl fmt::Display for FoldAllPatternsPass {
+impl fmt::Display for FoldAllPatterns {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "FoldAllPatternsPass")
+        write!(f, "FoldAllPatterns")
     }
 }
 
-impl fmt::Debug for FoldAllPatternsPass {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "FoldAllPatternsPass")
-    }
-}
-
-impl Pass for FoldAllPatternsPass {
+impl Pass for FoldAllPatterns {
     type I = Cell;
 
     fn run(&self, netlist: &Rc<Netlist<Self::I>>) -> Result<String, Error> {
@@ -208,7 +203,7 @@ register_passes!(BasicPasses<Cell>;
     #[cfg(feature = "graph")]
     DotGraph<Cell>,
     /// A pass that runs all built-in patterns to a fixed point.
-    FoldAllPatternsPass,
+    FoldAllPatterns,
     /// A dummy pass that emits the Verilog of the netlist.
     PrintVerilog<Cell>,
     /// A pass that renames wires and instances sequentially __0__, __1__, ...

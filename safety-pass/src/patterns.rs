@@ -6,7 +6,7 @@
 
 use crate::{Cell, CellType, Create, Pattern, Replace};
 use log::debug;
-use safety_net::{DrivenNet, Error, InputPort, Instantiable, NetRef};
+use safety_net::{DrivenNet, Error, Instantiable, NetRef};
 use std::fmt;
 
 /// A * A = A
@@ -60,7 +60,6 @@ impl Pattern for Idempotent {
 
 /// Folds monotone AND/OR gate trees (nested homogeneous gates) into a single equivalent (wider) gate.
 /// The fold applies to all AND or all OR gates until final total fan-in = 4 (max-sized gate, i.e. AND4)
-/// This allows collapsing arbitrary balanced or unbalanced trees of AND/OR gates into a single wider gate.
 #[derive(Debug)]
 pub struct MonotoneFold;
 
@@ -71,7 +70,7 @@ impl fmt::Display for MonotoneFold {
 }
 
 impl MonotoneFold {
-    /// Helper to [apply] that checks homogeneity of fanin gates
+    /// Helper to [Self::apply] that checks homogeneity of fanin gates
     fn can_combine(ct: CellType, children: &[CellType], extra: usize) -> Option<CellType> {
         if !ct.is_and() && !ct.is_or() {
             return None;
@@ -100,8 +99,8 @@ impl MonotoneFold {
 /// `None` at the outer level means an input was undriven; inner `None` means no constant of
 /// that polarity was found.
 type ConstInputs = Option<(
-    Option<InputPort<Cell>>,
-    Option<InputPort<Cell>>,
+    Option<DrivenNet<Cell>>,
+    Option<DrivenNet<Cell>>,
     Option<DrivenNet<Cell>>,
 )>;
 
@@ -110,21 +109,18 @@ type ConstInputs = Option<(
 /// Helper to [`AndAbsorb`], [`AndIdentity`], [`OrAbsorb`], [`OrIdentity`],
 /// [`NandAbsorb`], [`NandIdentity`], [`NorAbsorb`], and [`NorIdentity`].
 fn search_inputs(cell: &NetRef<Cell>) -> ConstInputs {
-    let mut const_false: Option<InputPort<Cell>> = None;
-    let mut const_true: Option<InputPort<Cell>> = None;
+    use safety_net::Logic;
+    let mut const_false: Option<DrivenNet<Cell>> = None;
+    let mut const_true: Option<DrivenNet<Cell>> = None;
     let mut other: Option<DrivenNet<Cell>> = None;
     for port in cell.inputs() {
         let driver = port.get_driver()?;
-        let driver_ref = driver.clone().unwrap();
-        match driver_ref
-            .get_instance_type()
-            .and_then(|t| t.get_constant())
-        {
-            Some(safety_net::Logic::False) => {
-                const_false = Some(port);
+        match driver.get_instance_type().and_then(|t| t.get_constant()) {
+            Some(Logic::False) => {
+                const_false = Some(driver);
             }
-            Some(safety_net::Logic::True) => {
-                const_true = Some(port);
+            Some(Logic::True) => {
+                const_true = Some(driver);
             }
             _ => {
                 other = Some(driver);
@@ -158,12 +154,7 @@ impl Pattern for MonotoneFold {
             let Some(driver) = input.get_driver() else {
                 return Ok(false);
             };
-            match driver
-                .clone()
-                .unwrap()
-                .get_instance_type()
-                .map(|ct| ct.get_type())
-            {
+            match driver.get_instance_type().map(|ct| ct.get_type()) {
                 Some(ct)
                     if (ct.is_and() && root_type.is_and()) || (ct.is_or() && root_type.is_or()) =>
                 {
@@ -186,7 +177,7 @@ impl Pattern for MonotoneFold {
         };
 
         let new_inst_name = cell.get_instance_name().unwrap() + "_folded".into();
-        let new_gate = create(Cell::new(new_type, None), new_inst_name);
+        let new_gate = create(cell_type.new_like(new_type), new_inst_name);
 
         let mut port_idx = 0;
         for child_ref in &child_drivers {
@@ -237,10 +228,9 @@ impl Pattern for AndAbsorb {
         let Some((Some(gnd_port), _, _)) = search_inputs(cell) else {
             return Ok(false);
         };
-        let gnd_driver = gnd_port.get_driver().unwrap();
         let output = cell.get_output(0);
         debug!("AndAbsorb: AND absorb 0 on cell {}!", output.as_net());
-        replace(output, gnd_driver)?;
+        replace(output, gnd_port)?;
         Ok(true)
     }
 }
@@ -300,10 +290,9 @@ impl Pattern for OrAbsorb {
         let Some((_, Some(vcc_port), _)) = search_inputs(cell) else {
             return Ok(false);
         };
-        let vcc_driver = vcc_port.get_driver().unwrap();
         let output = cell.get_output(0);
         debug!("OrAbsorb: OR absorb 1 on cell {}!", output.as_net());
-        replace(output, vcc_driver)?;
+        replace(output, vcc_port)?;
         Ok(true)
     }
 }
@@ -355,22 +344,30 @@ impl Pattern for DoubleNegation {
     fn apply(
         &self,
         cell: &NetRef<Self::I>,
-        _cell_type: &Self::I,
+        cell_type: &Self::I,
         _create: &Create<Self::I>,
         replace: &mut Replace<Self::I>,
     ) -> Result<bool, Error> {
+        let cell_type = cell_type.get_type();
+        if !matches!(cell_type, CellType::NOT | CellType::INV) {
+            return Ok(false);
+        }
+
         let Some(driver) = cell.get_input(0).get_driver() else {
             return Ok(false);
         };
-        let driver_ref = driver.clone().unwrap();
-        let Some(inner_input) = driver_ref
-            .get_instance_type()
-            .filter(|t| matches!(t.get_type(), CellType::NOT | CellType::INV))
-            .and_then(|_| driver_ref.get_input(0).get_driver())
-        else {
+
+        let Some(cell_type) = driver.get_instance_type().map(|t| t.get_type()) else {
             return Ok(false);
         };
 
+        if !matches!(cell_type, CellType::NOT | CellType::INV) {
+            return Ok(false);
+        }
+
+        let Some(inner_input) = driver.unwrap().get_input(0).get_driver() else {
+            return Ok(false);
+        };
         let output = cell.get_output(0);
         debug!("DoubleNegation applied to cell {}!", output.as_net());
         replace(output, inner_input)?;
@@ -400,14 +397,14 @@ impl Pattern for NandAbsorb {
         if !matches!(ct, CellType::NAND | CellType::NAND2) {
             return Ok(false);
         }
-        let Some((_const_false, _, _)) = search_inputs(cell) else {
-            return Ok(false);
-        };
         let Some((Some(_), _, _)) = search_inputs(cell) else {
             return Ok(false);
         };
         let inst_name = cell.get_instance_name().unwrap();
-        let vcc = create(Cell::new(CellType::VCC, None), inst_name + "_const1".into());
+        let vcc = create(
+            cell_type.new_like(CellType::VCC),
+            inst_name + "_const1".into(),
+        );
         let output = cell.get_output(0);
         debug!("NandAbsorb: NAND absorb 0 on {}!", output.as_net());
         replace(output, vcc.get_output(0))?;
@@ -436,18 +433,12 @@ impl Pattern for NandIdentity {
         if !matches!(ct, CellType::NAND | CellType::NAND2) {
             return Ok(false);
         }
-        let Some((_, const_true, _other)) = search_inputs(cell) else {
-            return Ok(false);
-        };
-        if const_true.is_none() {
-            return Ok(false);
-        }
-        let Some((_, Some(_), Some(other_driver))) = search_inputs(cell) else {
+        let Some((_, Some(_), Some(other))) = search_inputs(cell) else {
             return Ok(false);
         };
         let inst_name = cell.get_instance_name().unwrap();
-        let inv = create(Cell::new(CellType::INV, None), inst_name + "_inv".into());
-        inv.get_input(0).connect(other_driver);
+        let inv = create(cell_type.new_like(CellType::INV), inst_name + "_inv".into());
+        inv.get_input(0).connect(other);
         let output = cell.get_output(0);
         debug!("NandIdentity: NAND(A, 1) = NOT(A) on {}!", output.as_net());
         replace(output, inv.get_output(0))?;
@@ -476,14 +467,14 @@ impl Pattern for NorAbsorb {
         if !matches!(ct, CellType::NOR | CellType::NOR2) {
             return Ok(false);
         }
-        let Some((_, _const_true, _)) = search_inputs(cell) else {
-            return Ok(false);
-        };
         let Some((_, Some(_), _)) = search_inputs(cell) else {
             return Ok(false);
         };
         let inst_name = cell.get_instance_name().unwrap();
-        let gnd = create(Cell::new(CellType::GND, None), inst_name + "_const0".into());
+        let gnd = create(
+            cell_type.new_like(CellType::GND),
+            inst_name + "_const0".into(),
+        );
         let output = cell.get_output(0);
         debug!("NorAbsorb: NOR absorb 1 on {}!", output.as_net());
         replace(output, gnd.get_output(0))?;
@@ -512,18 +503,12 @@ impl Pattern for NorIdentity {
         if !matches!(ct, CellType::NOR | CellType::NOR2) {
             return Ok(false);
         }
-        let Some((const_false, _, _other)) = search_inputs(cell) else {
-            return Ok(false);
-        };
-        if const_false.is_none() {
-            return Ok(false);
-        }
-        let Some((Some(_), _, Some(other_driver))) = search_inputs(cell) else {
+        let Some((Some(_), _, Some(other))) = search_inputs(cell) else {
             return Ok(false);
         };
         let inst_name = cell.get_instance_name().unwrap();
-        let inv = create(Cell::new(CellType::INV, None), inst_name + "_inv".into());
-        inv.get_input(0).connect(other_driver);
+        let inv = create(cell_type.new_like(CellType::INV), inst_name + "_inv".into());
+        inv.get_input(0).connect(other);
         let output = cell.get_output(0);
         debug!("NorIdentity: NOR(A, 0) = NOT(A) on {}!", output.as_net());
         replace(output, inv.get_output(0))?;

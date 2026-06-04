@@ -346,6 +346,7 @@ pub struct Cell {
     inputs: Vec<Net>,
     outputs: Vec<Net>,
     params: HashMap<Identifier, Parameter>,
+    size: Option<usize>,
 }
 
 impl Cell {
@@ -369,12 +370,18 @@ impl Cell {
                 .map(Net::new_logic)
                 .collect(),
             params: HashMap::new(),
+            size,
         }
     }
 
     /// Get the cell type
     pub fn get_type(&self) -> CellType {
         self.ptype
+    }
+
+    /// Return a new cell with the same size
+    pub fn new_like(&self, ctype: CellType) -> Self {
+        Self::new(ctype, self.size)
     }
 
     /// Remap the ith input port to a new net name
