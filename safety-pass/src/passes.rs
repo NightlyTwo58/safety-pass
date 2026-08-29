@@ -366,7 +366,8 @@ impl<I: Instantiable> Pass for DedupConsts<I> {
 /// A pass that runs all patterns to a covergence.
 /// Checks patterns in insertion order
 /// AndIdentity, OrIdentity, AndAbsorb, OrAbsorb, NandIdentity, NorIdentity, NandAbsorb, NorAbsorb,
-/// DoubleNegation, Idempotent, MonotoneFold
+/// DoubleNegation, Idempotent, MonotoneFold, NotAndMap, NotOrMap, AoiMap22, AoiMap, OaiMap22, OaiMap,
+/// MuxSameInput, MuxConstSelect
 #[derive(Debug)]
 pub struct FoldAllPatterns;
 
@@ -381,8 +382,9 @@ impl Pass for FoldAllPatterns {
 
     fn run(&self, netlist: &Rc<Netlist<Self::I>>) -> Result<String, Error> {
         use crate::patterns::{
-            AndAbsorb, AndIdentity, DoubleNegation, Idempotent, MonotoneFold, NandAbsorb,
-            NandIdentity, NorAbsorb, NorIdentity, OrAbsorb, OrIdentity,
+            AndAbsorb, AndIdentity, AoiMap, AoiMap22, DoubleNegation, Idempotent,
+            MonotoneFold, MuxConstSelect, MuxSameInput, NandAbsorb, NandIdentity, NorAbsorb,
+            NorIdentity, NotAndMap, NotOrMap, OaiMap, OaiMap22, OrAbsorb, OrIdentity,
         };
         let mut folder = crate::Folder::new(100000);
         folder.insert(AndIdentity);
@@ -396,6 +398,14 @@ impl Pass for FoldAllPatterns {
         folder.insert(DoubleNegation);
         folder.insert(Idempotent);
         folder.insert(MonotoneFold);
+        folder.insert(NotAndMap);
+        folder.insert(NotOrMap);
+        folder.insert(AoiMap22);
+        folder.insert(AoiMap);
+        folder.insert(OaiMap22);
+        folder.insert(OaiMap);
+        folder.insert(MuxSameInput);
+        folder.insert(MuxConstSelect);
         folder.run(netlist)
     }
 }

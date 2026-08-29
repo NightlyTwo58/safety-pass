@@ -501,6 +501,596 @@ impl Pattern for NorIdentity {
         let output = cell.get_output(0);
         debug!("NorIdentity: NOR(A, 0) = NOT(A) on {}!", output.as_net());
         replace(output, inv.get_output(0))?;
+
+        Ok(true)
+    }
+}
+
+// Compound-gate ("techmap") patterns
+
+/// NOT(AND(A,B)) = NAND(A,B)
+#[derive(Debug)]
+pub struct NotAndMap;
+
+impl fmt::Display for NotAndMap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "NOT(AND(A,B)) => NAND(A,B)")
+    }
+}
+
+impl Pattern for NotAndMap {
+    type I = Cell;
+
+    fn apply(
+        &self,
+        cell: &NetRef<Self::I>,
+        cell_type: &Self::I,
+        create: &Create<Self::I>,
+        replace: &mut Replace<Self::I>,
+    ) -> Result<bool, Error> {
+        if !matches!(cell_type.get_type(), CellType::NOT | CellType::INV) {
+            return Ok(false);
+        }
+
+        let Some(driver) = cell.get_input(0).get_driver() else {
+            return Ok(false);
+        };
+
+        let Some(and_type) = driver.get_instance_type().map(|t| t.get_type()) else {
+            return Ok(false);
+        };
+
+        if !matches!(and_type, CellType::AND | CellType::AND2) {
+            return Ok(false);
+        }
+
+        let target = if matches!(and_type, CellType::AND) {
+            CellType::NAND
+        } else {
+            CellType::NAND2
+        };
+
+        let and_ref = driver.unwrap();
+
+        let Some(a) = and_ref.get_input(0).get_driver() else {
+            return Ok(false);
+        };
+
+        let Some(b) = and_ref.get_input(1).get_driver() else {
+            return Ok(false);
+        };
+
+        let inst_name = cell.get_instance_name().unwrap();
+
+        let nand = create(
+            cell_type.new_like(target),
+            inst_name + "_nand".into(),
+        );
+
+        nand.get_input(0).connect(a);
+        nand.get_input(1).connect(b);
+
+        let output = cell.get_output(0);
+        debug!("NotAndMap: NOT(AND(A,B)) => NAND on {}!", output.as_net());
+        replace(output, nand.get_output(0))?;
+
+        Ok(true)
+    }
+}
+
+/// NOT(OR(A,B)) = NOR(A,B)
+#[derive(Debug)]
+pub struct NotOrMap;
+
+impl fmt::Display for NotOrMap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "NOT(OR(A,B)) => NOR(A,B)")
+    }
+}
+
+impl Pattern for NotOrMap {
+    type I = Cell;
+
+    fn apply(
+        &self,
+        cell: &NetRef<Self::I>,
+        cell_type: &Self::I,
+        create: &Create<Self::I>,
+        replace: &mut Replace<Self::I>,
+    ) -> Result<bool, Error> {
+        if !matches!(cell_type.get_type(), CellType::NOT | CellType::INV) {
+            return Ok(false);
+        }
+
+        let Some(driver) = cell.get_input(0).get_driver() else {
+            return Ok(false);
+        };
+
+        let Some(or_type) = driver.get_instance_type().map(|t| t.get_type()) else {
+            return Ok(false);
+        };
+
+        if !matches!(or_type, CellType::OR | CellType::OR2) {
+            return Ok(false);
+        }
+
+        let target = if matches!(or_type, CellType::OR) {
+            CellType::NOR
+        } else {
+            CellType::NOR2
+        };
+
+        let or_ref = driver.unwrap();
+
+        let Some(a) = or_ref.get_input(0).get_driver() else {
+            return Ok(false);
+        };
+
+        let Some(b) = or_ref.get_input(1).get_driver() else {
+            return Ok(false);
+        };
+
+        let inst_name = cell.get_instance_name().unwrap();
+
+        let nor = create(
+            cell_type.new_like(target),
+            inst_name + "_nor".into(),
+        );
+
+        nor.get_input(0).connect(a);
+        nor.get_input(1).connect(b);
+
+        let output = cell.get_output(0);
+        debug!("NotOrMap: NOT(OR(A,B)) => NOR on {}!", output.as_net());
+        replace(output, nor.get_output(0))?;
+
+        Ok(true)
+    }
+}
+
+/// NOR(AND(B1,B2), A) = AOI21(A,B1,B2)
+#[derive(Debug)]
+pub struct AoiMap;
+
+impl fmt::Display for AoiMap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "NOR(AND(B1,B2),A) => AOI21(A,B1,B2)")
+    }
+}
+
+impl Pattern for AoiMap {
+    type I = Cell;
+
+    fn apply(
+        &self,
+        cell: &NetRef<Self::I>,
+        cell_type: &Self::I,
+        create: &Create<Self::I>,
+        replace: &mut Replace<Self::I>,
+    ) -> Result<bool, Error> {
+        if !matches!(cell_type.get_type(), CellType::NOR | CellType::NOR2) {
+            return Ok(false);
+        }
+
+        let inputs: Vec<_> = cell.inputs().collect();
+
+        if inputs.len() != 2 {
+            return Ok(false);
+        }
+
+        let Some(d0) = inputs[0].get_driver() else {
+            return Ok(false);
+        };
+
+        let Some(d1) = inputs[1].get_driver() else {
+            return Ok(false);
+        };
+
+        let t0 = d0.get_instance_type().map(|t| t.get_type());
+        let t1 = d1.get_instance_type().map(|t| t.get_type());
+
+        let is_and = |t: Option<CellType>| {
+            matches!(t, Some(CellType::AND) | Some(CellType::AND2))
+        };
+
+        let (and_driver, other_driver) = if is_and(t0) {
+            (d0, d1)
+        } else if is_and(t1) {
+            (d1, d0)
+        } else {
+            return Ok(false);
+        };
+
+        let and_ref = and_driver.unwrap();
+
+        let Some(b1) = and_ref.get_input(0).get_driver() else {
+            return Ok(false);
+        };
+
+        let Some(b2) = and_ref.get_input(1).get_driver() else {
+            return Ok(false);
+        };
+
+        let inst_name = cell.get_instance_name().unwrap();
+
+        let aoi = create(
+            cell_type.new_like(CellType::AOI21),
+            inst_name + "_aoi21".into(),
+        );
+
+        aoi.get_input(0).connect(other_driver);
+        aoi.get_input(1).connect(b1);
+        aoi.get_input(2).connect(b2);
+
+        let output = cell.get_output(0);
+        debug!("AoiMap: NOR(AND(B1,B2),A) => AOI21 on {}!", output.as_net());
+        replace(output, aoi.get_output(0))?;
+
+        Ok(true)
+    }
+}
+
+/// NAND(OR(B1,B2), A) = OAI21(A,B1,B2)
+#[derive(Debug)]
+pub struct OaiMap;
+
+impl fmt::Display for OaiMap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "NAND(OR(B1,B2),A) => OAI21(A,B1,B2)")
+    }
+}
+
+impl Pattern for OaiMap {
+    type I = Cell;
+
+    fn apply(
+        &self,
+        cell: &NetRef<Self::I>,
+        cell_type: &Self::I,
+        create: &Create<Self::I>,
+        replace: &mut Replace<Self::I>,
+    ) -> Result<bool, Error> {
+        if !matches!(cell_type.get_type(), CellType::NAND | CellType::NAND2) {
+            return Ok(false);
+        }
+
+        let inputs: Vec<_> = cell.inputs().collect();
+
+        if inputs.len() != 2 {
+            return Ok(false);
+        }
+
+        let Some(d0) = inputs[0].get_driver() else {
+            return Ok(false);
+        };
+
+        let Some(d1) = inputs[1].get_driver() else {
+            return Ok(false);
+        };
+
+        let t0 = d0.get_instance_type().map(|t| t.get_type());
+        let t1 = d1.get_instance_type().map(|t| t.get_type());
+
+        let is_or = |t: Option<CellType>| {
+            matches!(t, Some(CellType::OR) | Some(CellType::OR2))
+        };
+
+        let (or_driver, other_driver) = if is_or(t0) {
+            (d0, d1)
+        } else if is_or(t1) {
+            (d1, d0)
+        } else {
+            return Ok(false);
+        };
+
+        let or_ref = or_driver.unwrap();
+
+        let Some(b1) = or_ref.get_input(0).get_driver() else {
+            return Ok(false);
+        };
+
+        let Some(b2) = or_ref.get_input(1).get_driver() else {
+            return Ok(false);
+        };
+
+        let inst_name = cell.get_instance_name().unwrap();
+
+        let oai = create(
+            cell_type.new_like(CellType::OAI21),
+            inst_name + "_oai21".into(),
+        );
+
+        oai.get_input(0).connect(other_driver);
+        oai.get_input(1).connect(b1);
+        oai.get_input(2).connect(b2);
+
+        let output = cell.get_output(0);
+        debug!("OaiMap: NAND(OR(B1,B2),A) => OAI21 on {}!", output.as_net());
+        replace(output, oai.get_output(0))?;
+
+        Ok(true)
+    }
+}
+
+/// NOR(AND(A1,A2), AND(B1,B2)) = AOI22(A1,A2,B1,B2)
+#[derive(Debug)]
+pub struct AoiMap22;
+
+impl fmt::Display for AoiMap22 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "NOR(AND(A1,A2),AND(B1,B2)) => AOI22(A1,A2,B1,B2)"
+        )
+    }
+}
+
+impl Pattern for AoiMap22 {
+    type I = Cell;
+
+    fn apply(
+        &self,
+        cell: &NetRef<Self::I>,
+        cell_type: &Self::I,
+        create: &Create<Self::I>,
+        replace: &mut Replace<Self::I>,
+    ) -> Result<bool, Error> {
+        if !matches!(cell_type.get_type(), CellType::NOR | CellType::NOR2) {
+            return Ok(false);
+        }
+
+        let inputs: Vec<_> = cell.inputs().collect();
+
+        if inputs.len() != 2 {
+            return Ok(false);
+        }
+
+        let Some(d0) = inputs[0].get_driver() else {
+            return Ok(false);
+        };
+
+        let Some(d1) = inputs[1].get_driver() else {
+            return Ok(false);
+        };
+
+        let is_and = |d: &DrivenNet<Cell>| {
+            matches!(
+                d.get_instance_type().map(|t| t.get_type()),
+                Some(CellType::AND) | Some(CellType::AND2)
+            )
+        };
+
+        if !is_and(&d0) || !is_and(&d1) {
+            return Ok(false);
+        }
+
+        let r0 = d0.unwrap();
+        let r1 = d1.unwrap();
+
+        let (Some(a1), Some(a2)) = (
+            r0.get_input(0).get_driver(),
+            r0.get_input(1).get_driver(),
+        ) else {
+            return Ok(false);
+        };
+
+        let (Some(b1), Some(b2)) = (
+            r1.get_input(0).get_driver(),
+            r1.get_input(1).get_driver(),
+        ) else {
+            return Ok(false);
+        };
+
+        let inst_name = cell.get_instance_name().unwrap();
+
+        let aoi = create(
+            cell_type.new_like(CellType::AOI22),
+            inst_name + "_aoi22".into(),
+        );
+
+        aoi.get_input(0).connect(a1);
+        aoi.get_input(1).connect(a2);
+        aoi.get_input(2).connect(b1);
+        aoi.get_input(3).connect(b2);
+
+        let output = cell.get_output(0);
+        debug!("AoiMap22: NOR(AND,AND) => AOI22 on {}!", output.as_net());
+        replace(output, aoi.get_output(0))?;
+
+        Ok(true)
+    }
+}
+
+/// NAND(OR(A1,A2), OR(B1,B2)) = OAI22(A1,A2,B1,B2)
+#[derive(Debug)]
+pub struct OaiMap22;
+
+impl fmt::Display for OaiMap22 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "NAND(OR(A1,A2),OR(B1,B2)) => OAI22(A1,A2,B1,B2)"
+        )
+    }
+}
+
+impl Pattern for OaiMap22 {
+    type I = Cell;
+
+    fn apply(
+        &self,
+        cell: &NetRef<Self::I>,
+        cell_type: &Self::I,
+        create: &Create<Self::I>,
+        replace: &mut Replace<Self::I>,
+    ) -> Result<bool, Error> {
+        if !matches!(cell_type.get_type(), CellType::NAND | CellType::NAND2) {
+            return Ok(false);
+        }
+
+        let inputs: Vec<_> = cell.inputs().collect();
+
+        if inputs.len() != 2 {
+            return Ok(false);
+        }
+
+        let Some(d0) = inputs[0].get_driver() else {
+            return Ok(false);
+        };
+
+        let Some(d1) = inputs[1].get_driver() else {
+            return Ok(false);
+        };
+
+        let is_or = |d: &DrivenNet<Cell>| {
+            matches!(
+                d.get_instance_type().map(|t| t.get_type()),
+                Some(CellType::OR) | Some(CellType::OR2)
+            )
+        };
+
+        if !is_or(&d0) || !is_or(&d1) {
+            return Ok(false);
+        }
+
+        let r0 = d0.unwrap();
+        let r1 = d1.unwrap();
+
+        let (Some(a1), Some(a2)) = (
+            r0.get_input(0).get_driver(),
+            r0.get_input(1).get_driver(),
+        ) else {
+            return Ok(false);
+        };
+
+        let (Some(b1), Some(b2)) = (
+            r1.get_input(0).get_driver(),
+            r1.get_input(1).get_driver(),
+        ) else {
+            return Ok(false);
+        };
+
+        let inst_name = cell.get_instance_name().unwrap();
+
+        let oai = create(
+            cell_type.new_like(CellType::OAI22),
+            inst_name + "_oai22".into(),
+        );
+
+        oai.get_input(0).connect(a1);
+        oai.get_input(1).connect(a2);
+        oai.get_input(2).connect(b1);
+        oai.get_input(3).connect(b2);
+
+        let output = cell.get_output(0);
+        debug!("OaiMap22: NAND(OR,OR) => OAI22 on {}!", output.as_net());
+        replace(output, oai.get_output(0))?;
+
+        Ok(true)
+    }
+}
+
+/// MUX(S, A, A) = A
+#[derive(Debug)]
+pub struct MuxSameInput;
+
+impl fmt::Display for MuxSameInput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "MUX(S,A,A) = A")
+    }
+}
+
+impl Pattern for MuxSameInput {
+    type I = Cell;
+
+    fn apply(
+        &self,
+        cell: &NetRef<Self::I>,
+        cell_type: &Self::I,
+        _create: &Create<Self::I>,
+        replace: &mut Replace<Self::I>,
+    ) -> Result<bool, Error> {
+        if !matches!(cell_type.get_type(), CellType::MUX | CellType::MUX2) {
+            return Ok(false);
+        }
+
+        let Some(d1) = cell.get_input(1).get_driver() else {
+            return Ok(false);
+        };
+
+        let Some(d2) = cell.get_input(2).get_driver() else {
+            return Ok(false);
+        };
+
+        if d1 != d2 {
+            return Ok(false);
+        }
+
+        let output = cell.get_output(0);
+        debug!("MuxSameInput applied to cell {}!", output.as_net());
+        replace(output, d1)?;
+
+        Ok(true)
+    }
+}
+
+/// MUX(S,A,B) with constant S selects A or B directly.
+#[derive(Debug)]
+pub struct MuxConstSelect;
+
+impl fmt::Display for MuxConstSelect {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "MUX(const S,A,B) = A or B")
+    }
+}
+
+impl Pattern for MuxConstSelect {
+    type I = Cell;
+
+    fn apply(
+        &self,
+        cell: &NetRef<Self::I>,
+        cell_type: &Self::I,
+        _create: &Create<Self::I>,
+        replace: &mut Replace<Self::I>,
+    ) -> Result<bool, Error> {
+        use safety_net::Logic;
+
+        let ct = cell_type.get_type();
+
+        let (a_idx, b_idx) = match ct {
+            CellType::MUX => (1, 2),
+            CellType::MUX2 => (2, 1),
+            _ => return Ok(false),
+        };
+
+        let Some(s) = cell.get_input(0).get_driver() else {
+            return Ok(false);
+        };
+
+        let Some(sel) = s.get_instance_type().and_then(|t| t.get_constant()) else {
+            return Ok(false);
+        };
+
+        let chosen_idx = match sel {
+            Logic::True => a_idx,
+            Logic::False => b_idx,
+            _ => return Ok(false),
+        };
+
+        let Some(chosen) = cell.get_input(chosen_idx).get_driver() else {
+            return Ok(false);
+        };
+
+        let output = cell.get_output(0);
+
+        debug!(
+            "MuxConstSelect: constant-select MUX resolved on {}!",
+            output.as_net()
+        );
+
+        replace(output, chosen)?;
+
         Ok(true)
     }
 }

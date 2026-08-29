@@ -1,7 +1,8 @@
 use safety_net::{Instantiable, Net, Netlist};
 use safety_pass::patterns::{
-    AndAbsorb, AndIdentity, DoubleNegation, Idempotent, MonotoneFold, NandAbsorb, NandIdentity,
-    NorAbsorb, NorIdentity, OrAbsorb, OrIdentity,
+    AndAbsorb, AndIdentity, AoiMap, AoiMap22, DoubleNegation, Idempotent, MonotoneFold,
+    MuxConstSelect, MuxSameInput, NandAbsorb, NandIdentity, NorAbsorb, NorIdentity, NotAndMap,
+    NotOrMap, OaiMap, OaiMap22, OrAbsorb, OrIdentity,
 };
 use safety_pass::{Cell, CellType, Folder, Pass, Primitive};
 use std::rc::Rc;
@@ -592,4 +593,378 @@ fn test_nor_const0() {
     assert_eq!(outputs.len(), 1);
     let driver = outputs[0].0.clone().unwrap();
     assert_eq!(driver.get_ptype(), Some(CellType::INV));
+}
+
+fn not_and_netlist() -> Rc<Netlist<Cell>> {
+    // NOT(AND(a,b)) = NAND(a,b)
+    let nl = Netlist::new("top".into());
+    let a = nl.insert_input(Net::new_logic("a".into()));
+    let b = nl.insert_input(Net::new_logic("b".into()));
+
+    let and = nl
+        .insert_gate(and_gate(), "and".into(), &[a, b])
+        .unwrap()
+        .get_output(0);
+
+    let not = nl
+        .insert_gate(Cell::new(CellType::INV, None), "inv".into(), &[and])
+        .unwrap();
+
+    not.expose_with_name("y".into());
+    nl
+}
+
+fn not_or_netlist() -> Rc<Netlist<Cell>> {
+    // NOT(OR(a,b)) = NOR(a,b)
+    let nl = Netlist::new("top".into());
+    let a = nl.insert_input(Net::new_logic("a".into()));
+    let b = nl.insert_input(Net::new_logic("b".into()));
+
+    let or = nl
+        .insert_gate(or_gate(), "or".into(), &[a, b])
+        .unwrap()
+        .get_output(0);
+
+    let not = nl
+        .insert_gate(Cell::new(CellType::INV, None), "inv".into(), &[or])
+        .unwrap();
+
+    not.expose_with_name("y".into());
+    nl
+}
+
+fn aoi21_netlist() -> Rc<Netlist<Cell>> {
+    // NOR(AND(b1,b2),a) = AOI21(a,b1,b2)
+    let nl = Netlist::new("top".into());
+    let a = nl.insert_input(Net::new_logic("a".into()));
+    let b1 = nl.insert_input(Net::new_logic("b1".into()));
+    let b2 = nl.insert_input(Net::new_logic("b2".into()));
+
+    let and = nl
+        .insert_gate(and_gate(), "and".into(), &[b1, b2])
+        .unwrap()
+        .get_output(0);
+
+    let nor = nl
+        .insert_gate(Cell::new(CellType::NOR2, None), "nor".into(), &[and, a])
+        .unwrap();
+
+    nor.expose_with_name("y".into());
+    nl
+}
+
+fn oai21_netlist() -> Rc<Netlist<Cell>> {
+    // NAND(OR(b1,b2),a) = OAI21(a,b1,b2)
+    let nl = Netlist::new("top".into());
+    let a = nl.insert_input(Net::new_logic("a".into()));
+    let b1 = nl.insert_input(Net::new_logic("b1".into()));
+    let b2 = nl.insert_input(Net::new_logic("b2".into()));
+
+    let or = nl
+        .insert_gate(or_gate(), "or".into(), &[b1, b2])
+        .unwrap()
+        .get_output(0);
+
+    let nand = nl
+        .insert_gate(
+            Cell::new(CellType::NAND2, None),
+            "nand".into(),
+            &[or, a],
+        )
+        .unwrap();
+
+    nand.expose_with_name("y".into());
+    nl
+}
+
+fn aoi22_netlist() -> Rc<Netlist<Cell>> {
+    // NOR(AND(a1,a2),AND(b1,b2)) = AOI22(a1,a2,b1,b2)
+    let nl = Netlist::new("top".into());
+    let a1 = nl.insert_input(Net::new_logic("a1".into()));
+    let a2 = nl.insert_input(Net::new_logic("a2".into()));
+    let b1 = nl.insert_input(Net::new_logic("b1".into()));
+    let b2 = nl.insert_input(Net::new_logic("b2".into()));
+
+    let and1 = nl
+        .insert_gate(and_gate(), "and1".into(), &[a1, a2])
+        .unwrap()
+        .get_output(0);
+
+    let and2 = nl
+        .insert_gate(and_gate(), "and2".into(), &[b1, b2])
+        .unwrap()
+        .get_output(0);
+
+    let nor = nl
+        .insert_gate(
+            Cell::new(CellType::NOR2, None),
+            "nor".into(),
+            &[and1, and2],
+        )
+        .unwrap();
+
+    nor.expose_with_name("y".into());
+    nl
+}
+
+fn oai22_netlist() -> Rc<Netlist<Cell>> {
+    // NAND(OR(a1,a2),OR(b1,b2)) = OAI22(a1,a2,b1,b2)
+    let nl = Netlist::new("top".into());
+    let a1 = nl.insert_input(Net::new_logic("a1".into()));
+    let a2 = nl.insert_input(Net::new_logic("a2".into()));
+    let b1 = nl.insert_input(Net::new_logic("b1".into()));
+    let b2 = nl.insert_input(Net::new_logic("b2".into()));
+
+    let or1 = nl
+        .insert_gate(or_gate(), "or1".into(), &[a1, a2])
+        .unwrap()
+        .get_output(0);
+
+    let or2 = nl
+        .insert_gate(or_gate(), "or2".into(), &[b1, b2])
+        .unwrap()
+        .get_output(0);
+
+    let nand = nl
+        .insert_gate(
+            Cell::new(CellType::NAND2, None),
+            "nand".into(),
+            &[or1, or2],
+        )
+        .unwrap();
+
+    nand.expose_with_name("y".into());
+    nl
+}
+
+fn mux_same_input_netlist() -> Rc<Netlist<Cell>> {
+    // MUX(s,a,a) = a
+    let nl = Netlist::new("top".into());
+    let s = nl.insert_input(Net::new_logic("s".into()));
+    let a = nl.insert_input(Net::new_logic("a".into()));
+
+    let mux = nl
+        .insert_gate(
+            Cell::new(CellType::MUX, None),
+            "mux".into(),
+            &[s, a.clone(), a],
+        )
+        .unwrap();
+
+    mux.expose_with_name("y".into());
+    nl
+}
+
+fn mux_const_select_netlist() -> Rc<Netlist<Cell>> {
+    // MUX(1,a,b) = a
+    let nl = Netlist::new("top".into());
+    let a = nl.insert_input(Net::new_logic("a".into()));
+    let b = nl.insert_input(Net::new_logic("b".into()));
+    let vcc = nl
+        .insert_constant(safety_net::Logic::True, "vcc".into())
+        .unwrap();
+
+    let mux = nl
+        .insert_gate(
+            Cell::new(CellType::MUX, None),
+            "mux".into(),
+            &[vcc, a, b],
+        )
+        .unwrap();
+
+    mux.expose_with_name("y".into());
+    nl
+}
+
+#[test]
+fn test_not_and_map() {
+    // NOT(AND(a,b)) = NAND(a,b)
+    let nl = not_and_netlist();
+    let mut folder = Folder::<Cell>::new(101);
+    folder.insert(NotAndMap);
+
+    let before = nl.len();
+    assert_eq!(before, 4);
+
+    let res = folder.run(&nl);
+    assert!(res.is_ok());
+
+    assert_eq!(nl.len(), before - 1);
+
+    let outputs = nl.outputs();
+    assert_eq!(outputs.len(), 1);
+
+    let driver = outputs[0].0.clone().unwrap();
+    assert_eq!(
+        driver.get_instance_type().unwrap().get_type(),
+        CellType::NAND2
+    );
+}
+
+#[test]
+fn test_not_or_map() {
+    // NOT(OR(a,b)) = NOR(a,b)
+    let nl = not_or_netlist();
+    let mut folder = Folder::<Cell>::new(101);
+    folder.insert(NotOrMap);
+
+    let before = nl.len();
+    assert_eq!(before, 4);
+
+    let res = folder.run(&nl);
+    assert!(res.is_ok());
+
+    assert_eq!(nl.len(), before - 1);
+
+    let outputs = nl.outputs();
+    assert_eq!(outputs.len(), 1);
+
+    let driver = outputs[0].0.clone().unwrap();
+    assert_eq!(
+        driver.get_instance_type().unwrap().get_type(),
+        CellType::NOR2
+    );
+}
+
+#[test]
+fn test_aoi_map() {
+    // NOR(AND(b1,b2),a) = AOI21(a,b1,b2)
+    let nl = aoi21_netlist();
+    let mut folder = Folder::<Cell>::new(101);
+    folder.insert(AoiMap);
+
+    let before = nl.len();
+    assert_eq!(before, 5);
+
+    let res = folder.run(&nl);
+    assert!(res.is_ok());
+
+    assert_eq!(nl.len(), before - 1);
+
+    let outputs = nl.outputs();
+    assert_eq!(outputs.len(), 1);
+
+    let driver = outputs[0].0.clone().unwrap();
+    assert_eq!(
+        driver.get_instance_type().unwrap().get_type(),
+        CellType::AOI21
+    );
+}
+
+#[test]
+fn test_oai_map() {
+    // NAND(OR(b1,b2),a) = OAI21(a,b1,b2)
+    let nl = oai21_netlist();
+    let mut folder = Folder::<Cell>::new(101);
+    folder.insert(OaiMap);
+
+    let before = nl.len();
+    assert_eq!(before, 5);
+
+    let res = folder.run(&nl);
+    assert!(res.is_ok());
+
+    assert_eq!(nl.len(), before - 1);
+
+    let outputs = nl.outputs();
+    assert_eq!(outputs.len(), 1);
+
+    let driver = outputs[0].0.clone().unwrap();
+    assert_eq!(
+        driver.get_instance_type().unwrap().get_type(),
+        CellType::OAI21
+    );
+}
+
+#[test]
+fn test_aoi_map22() {
+    // NOR(AND(a1,a2),AND(b1,b2)) = AOI22(a1,a2,b1,b2)
+    let nl = aoi22_netlist();
+    let mut folder = Folder::<Cell>::new(101);
+    folder.insert(AoiMap22);
+
+    let before = nl.len();
+    assert_eq!(before, 7);
+
+    let res = folder.run(&nl);
+    assert!(res.is_ok());
+
+    assert_eq!(nl.len(), before - 2);
+
+    let outputs = nl.outputs();
+    assert_eq!(outputs.len(), 1);
+
+    let driver = outputs[0].0.clone().unwrap();
+    assert_eq!(
+        driver.get_instance_type().unwrap().get_type(),
+        CellType::AOI22
+    );
+}
+
+#[test]
+fn test_oai_map22() {
+    // NAND(OR(a1,a2),OR(b1,b2)) = OAI22(a1,a2,b1,b2)
+    let nl = oai22_netlist();
+    let mut folder = Folder::<Cell>::new(101);
+    folder.insert(OaiMap22);
+
+    let before = nl.len();
+    assert_eq!(before, 7);
+
+    let res = folder.run(&nl);
+    assert!(res.is_ok());
+
+    assert_eq!(nl.len(), before - 2);
+
+    let outputs = nl.outputs();
+    assert_eq!(outputs.len(), 1);
+
+    let driver = outputs[0].0.clone().unwrap();
+    assert_eq!(
+        driver.get_instance_type().unwrap().get_type(),
+        CellType::OAI22
+    );
+}
+
+#[test]
+fn test_mux_same_input() {
+    // MUX(s,a,a) = a
+    let nl = mux_same_input_netlist();
+    let mut folder = Folder::<Cell>::new(101);
+    folder.insert(MuxSameInput);
+
+    let before = nl.len();
+    assert_eq!(before, 3);
+
+    let res = folder.run(&nl);
+    assert!(res.is_ok());
+
+    assert_eq!(nl.len(), before - 1);
+
+    let outputs = nl.outputs();
+    assert_eq!(outputs.len(), 1);
+    assert!(outputs[0].0.is_an_input());
+}
+
+#[test]
+fn test_mux_const_select() {
+    // MUX(1,a,b) = a
+    let nl = mux_const_select_netlist();
+    let mut folder = Folder::<Cell>::new(101);
+    folder.insert(MuxConstSelect);
+
+    let before = nl.len();
+    assert_eq!(before, 4);
+
+    let res = folder.run(&nl);
+    assert!(res.is_ok());
+
+    assert_eq!(nl.len(), before - 2);
+
+    let outputs = nl.outputs();
+    assert_eq!(outputs.len(), 1);
+    assert!(outputs[0].0.is_an_input());
+
+    let inputs: Vec<_> = nl.inputs().collect();
+    assert_eq!(inputs.len(), 2);
 }
