@@ -1,5 +1,5 @@
 use safety_net::{Net, Netlist, assert_verilog_eq};
-use safety_pass::{Cell, CellType, Folder, Pipeline, patterns::Idempotent};
+use safety_pass::{Cell, CellType, Folder, Pipeline, patterns::BooleanSimplify};
 use std::rc::Rc;
 
 fn and_gate() -> Cell {
@@ -28,7 +28,7 @@ fn test_pipeline() {
     let nl = ex_netlist();
 
     let mut folder = Folder::<Cell>::new(101);
-    folder.insert(Idempotent);
+    folder.insert(BooleanSimplify);
 
     let mut pipeline = Pipeline::default();
     pipeline.insert(folder);
@@ -46,10 +46,10 @@ fn test_pipeline() {
 
 #[test]
 fn test_folder_debug() {
-    use safety_pass::patterns::{DoubleNegation, Idempotent};
+    use safety_pass::patterns::{BooleanSimplify, DoubleNegation};
     let mut folder = Folder::new(101);
     folder.insert(DoubleNegation);
-    folder.insert(Idempotent);
+    folder.insert(BooleanSimplify);
 
     let debug_str = format!("{folder:#?}");
     assert_verilog_eq!(
@@ -57,7 +57,7 @@ fn test_folder_debug() {
         "Folder {
             patterns: [
                 DoubleNegation,
-                Idempotent,
+                BooleanSimplify,
             ],
             max_iters: 101,
         }"
@@ -75,7 +75,7 @@ fn test_proc_multiple() {
     let mut pipeline = Pipeline::default();
     {
         let mut folder = Folder::<Cell>::new(101);
-        folder.insert(Idempotent);
+        folder.insert(BooleanSimplify);
 
         pipeline.insert(folder);
     }

@@ -363,11 +363,10 @@ impl<I: Instantiable> Pass for DedupConsts<I> {
     }
 }
 
-/// A pass that runs all patterns to a covergence.
-/// Checks patterns in insertion order
-/// AndIdentity, OrIdentity, AndAbsorb, OrAbsorb, NandIdentity, NorIdentity, NandAbsorb, NorAbsorb,
-/// DoubleNegation, Idempotent, MonotoneFold, NotAndMap, NotOrMap, AoiMap22, AoiMap, OaiMap22, OaiMap,
-/// MuxSameInput, MuxConstSelect
+/// A pass that runs all patterns to convergence.
+/// Checks patterns in insertion order:
+/// BooleanSimplify, ComplementaryInputs, DoubleNegation, MonotoneFold,
+/// NotBooleanMap, AoiMap22, AoiMap, OaiMap22, OaiMap, MuxSameInput, MuxConstSelect
 #[derive(Debug)]
 pub struct FoldAllPatterns;
 
@@ -382,24 +381,15 @@ impl Pass for FoldAllPatterns {
 
     fn run(&self, netlist: &Rc<Netlist<Self::I>>) -> Result<String, Error> {
         use crate::patterns::{
-            AndAbsorb, AndIdentity, AoiMap, AoiMap22, DoubleNegation, Idempotent,
-            MonotoneFold, MuxConstSelect, MuxSameInput, NandAbsorb, NandIdentity, NorAbsorb,
-            NorIdentity, NotAndMap, NotOrMap, OaiMap, OaiMap22, OrAbsorb, OrIdentity,
+            AoiMap, AoiMap22, BooleanSimplify, ComplementaryInputs, DoubleNegation, MonotoneFold,
+            MuxConstSelect, MuxSameInput, NotBooleanMap, OaiMap, OaiMap22,
         };
         let mut folder = crate::Folder::new(100000);
-        folder.insert(AndIdentity);
-        folder.insert(OrIdentity);
-        folder.insert(NandIdentity);
-        folder.insert(NorIdentity);
-        folder.insert(AndAbsorb);
-        folder.insert(OrAbsorb);
-        folder.insert(NandAbsorb);
-        folder.insert(NorAbsorb);
+        folder.insert(BooleanSimplify);
+        folder.insert(ComplementaryInputs);
         folder.insert(DoubleNegation);
-        folder.insert(Idempotent);
         folder.insert(MonotoneFold);
-        folder.insert(NotAndMap);
-        folder.insert(NotOrMap);
+        folder.insert(NotBooleanMap);
         folder.insert(AoiMap22);
         folder.insert(AoiMap);
         folder.insert(OaiMap22);
